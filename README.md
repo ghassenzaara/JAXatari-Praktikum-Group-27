@@ -1,4 +1,4 @@
-# JAXtari RL Baselines — Topic 26
+# JAXtari RL Baselines — Topic 27
 
 Classic deep-RL algorithms implemented in **JAX/Flax** and running on
 [**JAXAtari**](https://github.com/k4ntz/JAXAtari), the GPU-accelerated, object-centric
