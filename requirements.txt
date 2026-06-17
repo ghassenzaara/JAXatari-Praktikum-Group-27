@@ -1,0 +1,18 @@
+# Core ML stack
+jax[cuda12]
+flax
+optax
+
+# JAXAtari environment (GPU-accelerated Atari)
+git+https://github.com/k4ntz/JAXAtari.git
+
+# Data / plotting (for results CSV and learning curves)
+numpy
+pandas
+matplotlib
+
+# Training utilities
+tqdm
+tyro          # CLI argument parsing (required by the agents)
+
+# After installing, run once to fetch Atari sprites:  install-sprites

@@ -1,0 +1,23 @@
+# Virtual environment (recreate from requirements.txt — never commit)
+.venv/
+venv/
+env/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+
+# Training artifacts
+runs/
+wandb/
+*.cleanrl_model
+
+# Atari sprites (downloaded via install-sprites)
+*.npy
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
