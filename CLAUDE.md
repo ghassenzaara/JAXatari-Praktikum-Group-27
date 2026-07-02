@@ -100,6 +100,25 @@ python3 -c "import jax; print(jax.devices())"
 # Expected: [CudaDevice(id=0)]
 ```
 
+## GPU server access (TU ML Student Pool)
+
+- **Group repo:** https://github.com/ghassenzaara/JAXatari-Praktikum-Group-27 (branch `main`).
+- **Studentpool username:** `gzaara`. **SSH key** (ed25519) installed at WSL `~/.ssh/id_ed25519`
+  (600) with a matching `~/.ssh/config`; original key lives on Windows at
+  `C:\TU\Fs4\AuD Tutor\ssh key.txt` (+`.pub`). Public key was sent to `@raban.emunds`.
+- **Usable machines:** mlsp1, mlsp2, mlsp4, mlsp6, mlsp7. Avoid mlsp3/mlsp8 (not in use),
+  mlsp5 (GPU driver error). IPs are in `~/.ssh/config`; mlsp1 = 130.83.166.151.
+- **Must be on the TU-VPN** to reach the machines — eduroam alone is firewalled off (SSH times
+  out). Verified: `ssh gzaara@130.83.166.151` works from Windows PowerShell/cmd once on VPN.
+- **WSL quirk:** WSL2 does NOT inherit Windows VPN routes, so `ssh mlsp1` times out from WSL even
+  when Windows connects fine. Workarounds: (A) SSH from Windows PowerShell/cmd and use GitHub as
+  the code bridge; or (B) enable `networkingMode=mirrored` in `C:\Users\Zaara\.wslconfig` +
+  `wsl --shutdown` (needs Win11 22H2 / WSL ≥2.0).
+- **Workflow:** develop in WSL → `git push` → `ssh mlsp1` (from PowerShell) → `git pull` on the
+  server → run training on the server's GPU. Windows/WSL have no usable GPU; JAX runs on mlsp1.
+- **Before experiments (PDF):** use the pip `RTPT` module and join the `mlstudentpool management`
+  Mattermost channel. Use a venv (uv) or podman. Back up code to GitHub, checkpoints via rsync.
+
 ## What we are NOT doing
 
 - We are not building a multi-file framework — each agent is standalone
