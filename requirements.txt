@@ -14,5 +14,6 @@ matplotlib
 # Training utilities
 tqdm
 tyro          # CLI argument parsing (required by the agents)
+rtpt          # process-title / remaining-time stamping — required by TU ML student-pool rules
 
 # After installing, run once to fetch Atari sprites:  install-sprites

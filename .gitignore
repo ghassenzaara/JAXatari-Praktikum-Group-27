@@ -21,3 +21,6 @@ wandb/
 .DS_Store
 .idea/
 .vscode/
+
+CLAUDE.md
+student-pool-information.pdf

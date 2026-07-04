@@ -37,6 +37,7 @@ should be verified on first run are flagged with `# VERIFY`.
 """
 
 import os
+import math
 import time
 from dataclasses import dataclass
 from functools import partial
@@ -52,6 +53,14 @@ import optax
 import tyro
 from flax import struct
 from flax.training.train_state import TrainState
+
+# RTPT (Remaining Time to Process Title): required by the TU ML student-pool rules so
+# lab admins can see who is running what and for how long. Optional import so the agent
+# still runs on machines without it (e.g. local dev). Enable/disable via --rtpt-initials.
+try:
+    from rtpt import RTPT
+except ImportError:
+    RTPT = None
 
 import jaxatari
 from jaxatari.wrappers import (
@@ -117,6 +126,8 @@ class Args:
     """how many times to break out of scan to log + checkpoint metrics"""
     save_results: bool = True
     results_dir: str = "results"
+    rtpt_initials: str = "GZ"
+    """name initials shown in the RTPT process title (lab rule). Set to '' to disable RTPT."""
 
 
 # --------------------------------------------------------------------------------------
@@ -419,7 +430,19 @@ def main(args: Args):
     # ---- driver: chunked scan for periodic logging --------------------------------
     total_iters = args.total_timesteps // args.num_envs
     chunk_iters = max(1, total_iters // args.num_logs)
+    n_chunks = math.ceil(total_iters / chunk_iters)
     carry = (q_state, buffer, obs, env_state, key, jnp.array(0, dtype=jnp.int32))
+
+    # RTPT: one .step() per logging chunk, so max_iterations == number of chunks.
+    rtpt = None
+    if RTPT is not None and args.rtpt_initials:
+        rtpt = RTPT(name_initials=args.rtpt_initials,
+                    experiment_name=f"C51-{args.game}-{args.obs_mode}",
+                    max_iterations=n_chunks)
+        rtpt.start()
+    elif RTPT is None and args.rtpt_initials:
+        print("(RTPT not installed — process title won't show remaining time. "
+              "`pip install rtpt` on the lab machine.)")
 
     history = []  # (global_step, mean_return)
     start_time = time.time()
@@ -443,6 +466,8 @@ def main(args: Args):
             import wandb
             wandb.log({"charts/episodic_return": mean_ret, "losses/loss": loss,
                        "charts/epsilon": eps, "charts/SPS": sps}, step=global_step)
+        if rtpt is not None:
+            rtpt.step(subtitle=f"ret={mean_ret:.1f}")
 
     # ---- save results -------------------------------------------------------------
     if args.save_results:
