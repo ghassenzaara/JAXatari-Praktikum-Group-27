@@ -262,6 +262,20 @@ of the CleanRL sources lives in `C51 doccumentation.md` at the repo root.
   cross-entropy loss) ported verbatim from CleanRL; rewards/dones reshaped to (B,1) for the
   support shift.
 - **Optimizer** switch `--optimizer {adam,rmsprop}` (adam default, `eps=0.01/batch_size`).
+- **Object-centric MUST be normalized (bug fixed 2026-07-04).** First OC Pong run collapsed:
+  return went −19.6 → **−21.0** and froze for ~9M steps while pixel solved the game (→ +20.8).
+  Root cause: `ObjectCentricWrapper` emits **raw pixel-space coordinates** (x∈[0,160],
+  y∈[0,210], …) with no normalization, and the MLP had no input scaling of its own (the CNN
+  path divides by 255, the MLP path did not). Raw large-magnitude inputs saturated the tiny
+  net, the per-atom softmax collapsed to ~one-hot, expected-value Q's became indistinguishable,
+  and the greedy policy locked to one bad action. **Fix:** wrap the OC env with
+  `NormalizeObservationWrapper` (scales features to [0,1] via the space's low/high bounds),
+  ordered `FlattenObservationWrapper(NormalizeObservationWrapper(ObjectCentricWrapper(...)))`
+  — exactly matching JAXAtari's own `ppo_jaxatari_scan.py` OC baseline. Also enlarged the MLP
+  from CleanRL's CartPole-sized `Dense(120)->Dense(84)` to `Dense(512)->Dense(512)` (the
+  JAXAtari OC baseline uses `Dense(461)->Dense(512)`); Atari OC vectors are far higher-dim
+  than CartPole's 4, so the small net underfit. **This applies to IQN/Rainbow/IMPALA too** —
+  every OC agent needs `NormalizeObservationWrapper` + an appropriately sized MLP.
 - **`bash` cannot reach the WSL filesystem** (`\\wsl.localhost\...` is a UNC path the sandbox
   rejects), so training must be run in WSL directly; the Read/Write/Edit tools DO reach it.
 
@@ -272,6 +286,15 @@ python agents/c51_jaxtari.py --game pong --obs-mode pixel         --total-timest
 python agents/c51_jaxtari.py --game pong --obs-mode object_centric --total-timesteps 200000
 ```
 
-Outputs `results/<game>/c51_<mode>_scores.csv` and `_learning_curve.png`. CLI flags marked
-`# VERIFY` in the file (e.g. `action_space().n`, obs shapes) should be sanity-checked on the
-first run.
+Outputs per run in `results/<game>/`:
+- `c51_<mode>_metrics.csv` — wide CSV: `global_step, episodic_return, episodic_length, loss,
+  q_value, epsilon, sps` (mirrors CleanRL's TensorBoard `charts/` + `losses/` panels).
+- `c51_<mode>_metrics.png` — 6-panel dashboard of the above series.
+- `c51_<mode>_scores.csv` — legacy 2-column (`global_step, episodic_return`), kept for
+  backward compatibility with existing report/plot scripts.
+- `c51_<mode>_learning_curve.png` — standalone episodic-return curve.
+
+`loss`/`q_value` are averaged only over iterations where a gradient step actually fired
+(pre-`learning_starts` iters report 0 and are masked out), so early rows show `nan` there.
+CLI flags marked `# VERIFY` in the file (e.g. `action_space().n`, obs shapes) should be
+sanity-checked on the first run.

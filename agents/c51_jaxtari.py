@@ -68,6 +68,7 @@ from jaxatari.wrappers import (
     ObjectCentricWrapper,
     PixelObsWrapper,
     FlattenObservationWrapper,
+    NormalizeObservationWrapper,
     LogWrapper,
 )
 
@@ -156,7 +157,14 @@ class CNNQNetwork(nn.Module):
 
 
 class MLPQNetwork(nn.Module):
-    """Object-centric mode. Expects a flat feature vector (B, features)."""
+    """Object-centric mode. Expects a flat feature vector (B, features).
+
+    Hidden sizes (512, 512) follow JAXAtari's own object-centric baseline
+    (ppo_jaxatari_scan.py uses Dense(461)->Dense(512)), NOT CleanRL's CartPole
+    c51_jax.py (120, 84): Atari OC feature vectors are far higher-dimensional than
+    CartPole's 4, so the CartPole-sized net severely underfits. Inputs are already
+    scaled to [0,1] by NormalizeObservationWrapper (see make_env), so no /255 here.
+    """
     action_dim: int
     n_atoms: int
 
@@ -164,8 +172,8 @@ class MLPQNetwork(nn.Module):
     def __call__(self, x):
         b = x.shape[0]
         x = x.astype(jnp.float32)
-        x = nn.relu(nn.Dense(120)(x))
-        x = nn.relu(nn.Dense(84)(x))
+        x = nn.relu(nn.Dense(512)(x))
+        x = nn.relu(nn.Dense(512)(x))
         x = nn.Dense(self.action_dim * self.n_atoms)(x)
         x = x.reshape((b, self.action_dim, self.n_atoms))
         return nn.softmax(x, axis=-1)
@@ -253,8 +261,17 @@ def make_env(args: Args):
             clip_reward=True,
         )
     elif args.obs_mode == "object_centric":
+        # NormalizeObservationWrapper is ESSENTIAL here: ObjectCentricWrapper emits raw
+        # pixel-space coordinates (x in [0,160], y in [0,210], widths, ...). The MLP has
+        # no input scaling of its own (unlike the CNN's /255), so without this the raw
+        # large-magnitude features saturate the tiny net, the per-atom softmax collapses
+        # to ~one-hot, and the greedy policy locks to a single bad action (Pong -> -21).
+        # NormalizeObservationWrapper scales each feature to [0,1] using the space bounds.
+        # Ordering matches JAXAtari's own ppo_oc baseline: Flatten(Normalize(OC(...))).
         env = FlattenObservationWrapper(
-            ObjectCentricWrapper(atari, frame_stack_size=4, frame_skip=4, clip_reward=True)
+            NormalizeObservationWrapper(
+                ObjectCentricWrapper(atari, frame_stack_size=4, frame_skip=4, clip_reward=True)
+            )
         )
     else:
         raise ValueError(f"obs_mode must be 'pixel' or 'object_centric', got {args.obs_mode}")
@@ -416,9 +433,11 @@ def main(args: Args):
 
         metrics = {
             "returns": info["returned_episode_returns"],   # (num_envs,)
+            "lengths": info["returned_episode_lengths"],   # (num_envs,)
             "finished": info["returned_episode"],          # (num_envs,) bool
             "loss": loss,
             "q_val": q_val,
+            "trained": do_train.astype(jnp.float32),       # 1.0 on gradient-step iters
             "epsilon": epsilon,
         }
         return (q_state, buffer, next_obs, env_state, key, global_step), metrics
@@ -444,27 +463,53 @@ def main(args: Args):
         print("(RTPT not installed — process title won't show remaining time. "
               "`pip install rtpt` on the lab machine.)")
 
-    history = []  # (global_step, mean_return)
+    # Per-chunk records, one row per log point. Columns mirror CleanRL's TensorBoard panels
+    # (charts/episodic_return, charts/episodic_length, losses/loss, losses/q_values,
+    # charts/epsilon, charts/SPS) so the report can show the same dashboard offline.
+    history = []  # list of dicts (see COLUMNS below)
+    COLUMNS = ["global_step", "episodic_return", "episodic_length",
+               "loss", "q_value", "epsilon", "sps"]
     start_time = time.time()
+    prev_step = 0
+    prev_time = start_time
     done_iters = 0
     while done_iters < total_iters:
         n = min(chunk_iters, total_iters - done_iters)
         carry, metrics = run_chunk(carry, n_iters=n)
         done_iters += n
         global_step = int(carry[5])
+        now = time.time()
 
         finished = np.asarray(metrics["finished"])
         returns = np.asarray(metrics["returns"])
+        lengths = np.asarray(metrics["lengths"])
         mean_ret = float(returns[finished].mean()) if finished.any() else float("nan")
-        loss = float(np.asarray(metrics["loss"]).mean())
+        mean_len = float(lengths[finished].mean()) if finished.any() else float("nan")
+
+        # loss / q_value only count iterations where a gradient step actually fired
+        # (skipped steps report 0.0 and would otherwise drag the averages toward zero).
+        trained = np.asarray(metrics["trained"]).astype(bool)
+        loss_arr = np.asarray(metrics["loss"])
+        qval_arr = np.asarray(metrics["q_val"])
+        mean_loss = float(loss_arr[trained].mean()) if trained.any() else float("nan")
+        mean_q = float(qval_arr[trained].mean()) if trained.any() else float("nan")
+
         eps = float(np.asarray(metrics["epsilon"])[-1])
-        sps = int(global_step / (time.time() - start_time))
-        print(f"step={global_step:>9}  ep_return={mean_ret:8.2f}  loss={loss:8.4f}  "
-              f"eps={eps:4.2f}  SPS={sps}")
-        history.append((global_step, mean_ret))
+        sps = int((global_step - prev_step) / max(now - prev_time, 1e-6))  # instantaneous
+        prev_step, prev_time = global_step, now
+
+        print(f"step={global_step:>9}  ep_return={mean_ret:8.2f}  ep_len={mean_len:7.1f}  "
+              f"loss={mean_loss:8.4f}  q={mean_q:7.3f}  eps={eps:4.2f}  SPS={sps}")
+        history.append({
+            "global_step": global_step, "episodic_return": mean_ret,
+            "episodic_length": mean_len, "loss": mean_loss, "q_value": mean_q,
+            "epsilon": eps, "sps": sps,
+        })
         if args.track:
             import wandb
-            wandb.log({"charts/episodic_return": mean_ret, "losses/loss": loss,
+            wandb.log({"charts/episodic_return": mean_ret,
+                       "charts/episodic_length": mean_len,
+                       "losses/loss": mean_loss, "losses/q_values": mean_q,
                        "charts/epsilon": eps, "charts/SPS": sps}, step=global_step)
         if rtpt is not None:
             rtpt.step(subtitle=f"ret={mean_ret:.1f}")
@@ -474,30 +519,76 @@ def main(args: Args):
         out_dir = os.path.join(args.results_dir, args.game)
         os.makedirs(out_dir, exist_ok=True)
         tag = f"c51_{args.obs_mode}"
-        csv_path = os.path.join(out_dir, f"{tag}_scores.csv")
+
+        # Wide metrics CSV (all tracked series). The legacy 2-column scores CSV is kept
+        # for backward compatibility with existing plotting/report scripts.
+        csv_path = os.path.join(out_dir, f"{tag}_metrics.csv")
         with open(csv_path, "w") as f:
+            f.write(",".join(COLUMNS) + "\n")
+            for row in history:
+                f.write(",".join(str(row[c]) for c in COLUMNS) + "\n")
+        print(f"metrics -> {csv_path}")
+
+        scores_path = os.path.join(out_dir, f"{tag}_scores.csv")
+        with open(scores_path, "w") as f:
             f.write("global_step,episodic_return\n")
-            for gs, r in history:
-                f.write(f"{gs},{r}\n")
-        print(f"scores -> {csv_path}")
+            for row in history:
+                f.write(f"{row['global_step']},{row['episodic_return']}\n")
+        print(f"scores  -> {scores_path}")
+
         try:
             import matplotlib
             matplotlib.use("Agg")
             import matplotlib.pyplot as plt
-            hs = [(gs, r) for gs, r in history if not np.isnan(r)]
-            if hs:
-                xs, ys = zip(*hs)
+
+            steps = np.array([r["global_step"] for r in history], dtype=np.float64)
+
+            def _series(col):
+                return np.array([r[col] for r in history], dtype=np.float64)
+
+            # Multi-panel dashboard (mirrors CleanRL's TensorBoard charts/ + losses/).
+            panels = [
+                ("episodic_return", "episodic return", "charts"),
+                ("episodic_length", "episodic length", "charts"),
+                ("loss", "cross-entropy loss", "losses"),
+                ("q_value", "mean Q-value", "losses"),
+                ("epsilon", "epsilon", "charts"),
+                ("sps", "steps / second", "charts"),
+            ]
+            fig, axes = plt.subplots(2, 3, figsize=(15, 8))
+            for ax, (col, ylabel, group) in zip(axes.ravel(), panels):
+                ys = _series(col)
+                mask = ~np.isnan(ys)
+                if mask.any():
+                    ax.plot(steps[mask], ys[mask])
+                ax.set_title(f"{group}/{col}")
+                ax.set_xlabel("global step (frames)")
+                ax.set_ylabel(ylabel)
+                ax.grid(True, alpha=0.3)
+            fig.suptitle(f"C51 ({args.obs_mode}) — {args.game}")
+            fig.tight_layout()
+            dash_path = os.path.join(out_dir, f"{tag}_metrics.png")
+            fig.savefig(dash_path, dpi=110)
+            plt.close(fig)
+            print(f"panels  -> {dash_path}")
+
+            # Standalone learning curve (kept for the report / backward compatibility).
+            ret = _series("episodic_return")
+            m = ~np.isnan(ret)
+            if m.any():
                 plt.figure()
-                plt.plot(xs, ys)
+                plt.plot(steps[m], ret[m])
                 plt.xlabel("global step (frames)")
                 plt.ylabel("episodic return")
                 plt.title(f"C51 ({args.obs_mode}) — {args.game}")
+                plt.grid(True, alpha=0.3)
                 plt.tight_layout()
                 png_path = os.path.join(out_dir, f"{tag}_learning_curve.png")
                 plt.savefig(png_path)
-                print(f"curve  -> {png_path}")
+                plt.close()
+                print(f"curve   -> {png_path}")
         except Exception as e:
-            print(f"(skipped learning-curve plot: {e})")
+            print(f"(skipped plots: {e})")
 
     return carry
 
