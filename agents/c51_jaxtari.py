@@ -96,10 +96,10 @@ class Args:
     v_max: float = 10.0
     buffer_size: int | None = None
     """replay capacity. The buffer lives on-device (GPU) because it sits inside the
-    lax.scan carry. Pixel frames (4x84x84 uint8) are large, so capacity is VRAM-bound;
-    OC vectors are tiny so far more fits. Supervisor (Raban) confirmed a small buffer is
-    fine for now. If left unset, defaults per mode: 10_000 (pixel) / 100_000 (OC).
-    Team-standard "tuned" sizes: 20_000 (pixel) / 200_000 (OC). Lower further on <8GB GPUs."""
+    lax.scan carry. Pixel frames (4x84x84 uint8) are large (~55 KB/transition), so
+    capacity is VRAM-bound; OC vectors are tiny (~1 KB/transition) so the full CleanRL
+    buffer fits. If left unset, defaults per mode: 50_000 (pixel) / 1_000_000 (OC) —
+    sized for an 11 GB 2080 Ti. Lower the pixel value on <8GB GPUs (e.g. 10_000)."""
     gamma: float = 0.99
     target_network_frequency: int = 10_000
     """frames between hard target-network syncs"""
@@ -275,8 +275,11 @@ def main(args: Args):
     print(f"obs_mode={args.obs_mode}  obs_shape={obs_shape}  dtype={obs_dtype}  n_actions={n_actions}")
 
     # Mode-aware default replay capacity (on-device buffer is VRAM-bound for pixels).
+    # Pixel frames are ~55 KB/transition (obs+next_obs), so on an 11 GB 2080 Ti ~50k
+    # fits comfortably (~2.8 GB) while the CleanRL 1M (~56 GB) is impossible. OC vectors
+    # are ~1 KB/transition, so the full CleanRL 1M buffer costs only ~1 GB — no VRAM issue.
     if args.buffer_size is None:
-        args.buffer_size = 10_000 if args.obs_mode == "pixel" else 100_000
+        args.buffer_size = 50_000 if args.obs_mode == "pixel" else 1_000_000
     print(f"buffer_size={args.buffer_size}")
 
     reset_fn = jax.vmap(env.reset)

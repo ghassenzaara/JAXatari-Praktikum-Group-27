@@ -244,10 +244,16 @@ of the CleanRL sources lives in `C51 doccumentation.md` at the repo root.
   sits inside the `lax.scan` carry. The standard C51 capacity of 1,000,000 pixel frames
   (4x84x84 uint8, obs + next_obs) would need ~56GB of VRAM — impossible on the lab GPUs
   (e.g. RTX 2080 Ti = 11GB; an 8GB card OOMs even at 50k). Raban confirmed on Mattermost
-  (2026-06-17): **"small buffer should be fine for now."** So we use mode-aware defaults:
-  **pixel 10_000** (tuned 20_000), **object_centric 100_000** (tuned 200_000) — matching the
-  team-standard sizes Harsh used. The downside (reduced experience diversity vs. the paper)
-  is noted for the report. The considered alternative — a NumPy/CPU buffer with only sampled
+  (2026-06-17): **"small buffer should be fine for now."** With TU GPU access (2080 Ti,
+  **11 GB**) the constraint is now mode-specific: pixel is ~55 KB/transition (obs+next_obs)
+  so 1M would need ~56 GB (impossible), but ~50k fits at ~2.8 GB; OC vectors are ~1 KB/
+  transition so the **full CleanRL 1,000,000 buffer costs only ~1 GB — no VRAM issue**.
+  So defaults were bumped (2026-07-04) to mode-aware **pixel 50_000 / object_centric
+  1_000_000**. The two modes are separate processes (one `--obs-mode` per run) so the buffers
+  never coexist; `buffer_size` is a per-mode default and a CLI override. For OC the old 100k
+  default was barely above `learning_starts` (80k) so it wrapped almost immediately —
+  restoring 1M gives paper-scale experience diversity for free. The pixel downside (reduced
+  diversity vs. the paper's 1M) remains and is noted for the report. The considered alternative — a NumPy/CPU buffer with only sampled
   batches moved to GPU — was rejected because it requires breaking out of `lax.scan` for the
   (non-traceable) numpy sampling step. Set `XLA_PYTHON_CLIENT_MEM_FRACTION=0.9` for headroom.
 - **Vectorized** with `jax.vmap` over `num_envs` (default 8); the whole rollout+train loop is a
