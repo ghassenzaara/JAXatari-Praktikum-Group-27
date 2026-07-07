@@ -10,7 +10,7 @@ This is a university praktikum (TU Darmstadt) where we implement classic deep RL
 
 **Repository:** https://github.com/k4ntz/JAXAtari
 
-## Our assigned algorithms (Topic 26)
+## Our assigned algorithms (Topic 27)
 
 - **C51** (Categorical DQN)
 - **IQN** (Implicit Quantile Networks)
@@ -61,13 +61,28 @@ jaxtari-baselines/
 │   └── impala_jaxtari.py     # single-file IMPALA
 │
 ├── results/
-│   └── pong/
-│       ├── c51_scores.csv
-│       └── c51_learning_curve.png
+│   ├── compare_vs_cleanrl.py          # shared tooling (per-algo, stays at results/ root)
+│   ├── compare_metrics_vs_cleanrl.py
+│   ├── benchmark_throughput.py
+│   └── <ALGO>/                        # results/C51/, results/IQN/, ...
+│       └── <Game>/                    # results/C51/Pong/, results/C51/Frostbite/, ...
+│           ├── c51_<mode>_metrics.csv        # per (mode = pixel|object_centric)
+│           ├── c51_<mode>_scores.csv
+│           ├── c51_<mode>_learning_curve.png
+│           ├── c51_<mode>_metrics.png
+│           ├── <algo>_report_group_27.tex/.pdf   # the report + its figures
+│           └── ...
 │
 ├── requirements.txt
 └── README.md
 ```
+
+**Results layout convention:** `results/<ALGO>/<Game>/<files>` — algorithm folder
+(TitleCase, e.g. `C51`, `IQN`), then game folder (TitleCase, e.g. `Pong`, `Frostbite`),
+which holds that run's metrics, charts, report and CleanRL reference CSV. The three
+comparison/benchmark scripts are shared tooling and stay at `results/` root. The agent
+builds this path from `ALGO_NAME` + `game_dir_name(args.game)` (game arg is the lowercase
+JAXAtari key; `GAME_DISPLAY` maps multi-word games like `mspacman` -> `MsPacman`).
 
 ## Key constraints
 
@@ -276,6 +291,12 @@ of the CleanRL sources lives in `C51 doccumentation.md` at the repo root.
   JAXAtari OC baseline uses `Dense(461)->Dense(512)`); Atari OC vectors are far higher-dim
   than CartPole's 4, so the small net underfit. **This applies to IQN/Rainbow/IMPALA too** —
   every OC agent needs `NormalizeObservationWrapper` + an appropriately sized MLP.
+  - **TUTOR FEEDBACK (2026-07-07): `512×512` is too wide.** He suggested trying something
+    narrower/tapered like **`64×32×16`**. The 512×512 net still solved Pong (+18), but the
+    real lesson was *normalization*, not width — once inputs are normalized a much smaller
+    net suffices and generalizes better. **TODO: re-run OC Pong with a `64→32→16` MLP** and
+    adopt the narrower default for OC across all algorithms (C51/IQN/Rainbow/IMPALA) if it
+    holds up. Keep the fix (Normalize) fixed; only the hidden sizes change.
 - **`bash` cannot reach the WSL filesystem** (`\\wsl.localhost\...` is a UNC path the sandbox
   rejects), so training must be run in WSL directly; the Read/Write/Edit tools DO reach it.
 
@@ -286,7 +307,7 @@ python agents/c51_jaxtari.py --game pong --obs-mode pixel         --total-timest
 python agents/c51_jaxtari.py --game pong --obs-mode object_centric --total-timesteps 200000
 ```
 
-Outputs per run in `results/<game>/`:
+Outputs per run in `results/<ALGO>/<Game>/` (e.g. `results/C51/Pong/`):
 - `c51_<mode>_metrics.csv` — wide CSV: `global_step, episodic_return, episodic_length, loss,
   q_value, epsilon, sps` (mirrors CleanRL's TensorBoard `charts/` + `losses/` panels).
 - `c51_<mode>_metrics.png` — 6-panel dashboard of the above series.
@@ -298,3 +319,55 @@ Outputs per run in `results/<game>/`:
 (pre-`learning_starts` iters report 0 and are masked out), so early rows show `nan` there.
 CLI flags marked `# VERIFY` in the file (e.g. `action_space().n`, obs shapes) should be
 sanity-checked on the first run.
+
+### CleanRL comparison tooling (results/)
+
+The supervisor wants learning curves compared against the original (CleanRL) side by side.
+- **CleanRL reference data:** pulled from the official run's tensorboard log at
+  `huggingface.co/cleanrl/PongNoFrameskip-v4-c51_atari_jax-seed1` (file
+  `events.out.tfevents.*`), parsed with a dependency-free TFRecord/protobuf reader into
+  `results/C51/Pong/cleanrl_c51_pong_seed1_metrics.csv` (long format: `tag,global_step,value`).
+  Tags available: `charts/episodic_return`, `charts/episodic_length`, `charts/epsilon`,
+  `losses/loss`, `losses/q_values`, `charts/SPS`, `eval/episodic_return`.
+- **`results/compare_vs_cleanrl.py`** — single episodic-return overlay (ours pixel + OC vs the
+  real CleanRL curve). Runs anywhere (no GPU/jaxatari) since it only reads CSVs.
+- **`results/compare_metrics_vs_cleanrl.py`** — 6-panel dashboard, two curves per panel
+  (CleanRL vs ours). Needs our wide `c51_<mode>_metrics.csv`.
+- **`results/benchmark_throughput.py`** — pixel-vs-OC SPS + `num_envs` scaling (needs GPU box).
+- **The valid comparisons:** reward/return of **our pixel vs CleanRL pixel** (same game, same
+  reward scale — backend difference only matters for SPEED). OC has no CleanRL baseline; compare
+  it to our own pixel / JAXAtari `ppo_oc`. Early findings on Pong: our OC SPS ~1300 vs CleanRL
+  ~500 (>2x faster at only 8 envs); loss/epsilon/q_values overlap CleanRL closely; episodic
+  length differs (JAXAtari counts episode steps differently than ALE — note, not a bug).
+- **GOTCHA — old pixel run has no metrics:** the original `c51_pixel_scores.csv` predates the
+  6-metric logging, so it only holds `episodic_return`. To get the full pixel `metrics.csv`
+  (loss/q/length/epsilon/sps) for the 6-panel comparison, the pixel run must be **redone with
+  the current `c51_jaxtari.py`** (full 10M so the x-axis matches CleanRL). The OC run already
+  has its `metrics.csv`.
+
+---
+
+## Report & deliverable convention (STANDARD for every algorithm × game)
+
+The C51-on-Pong report was **praised by the tutor as perfect (2026-07-07)**, so its structure
+is now the template for the whole project. For **every algorithm (C51, IQN, Rainbow, IMPALA)**
+on **every game we run**, produce the same deliverable:
+
+1. Run **both observation modes** (pixel/CNN and object-centric/MLP).
+2. Compare **three curves**: **our pixel vs our object-centric vs the CleanRL reference**
+   (the "compare the 3" the tutor wants).
+3. Write a report from the LaTeX template at **`results/C51/Pong/c51_report_group_27.tex`**
+   (compiles to `..._group_27.pdf`), living in that run's `results/<ALGO>/<Game>/` folder.
+   Reuse its layout: a short intro, a results table (final return per mode vs reference), the
+   `compare_vs_cleanrl.png` learning-curve figure, the `compare_metrics_vs_cleanrl.png`
+   6-panel metrics figure, a findings paragraph, and a "questions for feedback" block. Adapt
+   the algorithm/game names and numbers per run.
+4. The two comparison figures come from the existing tooling: `results/compare_vs_cleanrl.py`
+   (learning curve) and `results/compare_metrics_vs_cleanrl.py` (6-panel). Point them at the
+   `results/<ALGO>/<Game>/<algo>_<mode>_metrics.csv` files; the CleanRL reference CSV is
+   per-(algo, game) and is extracted from the official tensorboard log the same way.
+
+**Multi-seed variance (tutor request, 2026-07-07):** for at least one *complicated* game
+(not Pong — something like Seaquest), run **multiple seeds** and report variance bands
+(mean ± std / min–max shading) on the learning curve, not just a single seed. Pong can stay
+single-seed. Build this into the plotting when we get to the harder game.

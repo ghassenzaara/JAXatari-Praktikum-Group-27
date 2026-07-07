@@ -72,6 +72,21 @@ from jaxatari.wrappers import (
     LogWrapper,
 )
 
+# Results layout: results/<ALGO_NAME>/<Game>/<files>. The game arg is lowercase (the
+# JAXAtari key, e.g. "pong"); folders are TitleCase for readability. GAME_DISPLAY maps
+# the multi-word games that .capitalize() would mangle (e.g. "mspacman" -> "MsPacman").
+ALGO_NAME = "C51"
+GAME_DISPLAY = {
+    "mspacman": "MsPacman",
+    "montezumarevenge": "MontezumaRevenge",
+    "beamrider": "BeamRider",
+}
+
+
+def game_dir_name(game: str) -> str:
+    """TitleCase folder name for a JAXAtari game key (results/<algo>/<Game>/)."""
+    return GAME_DISPLAY.get(game, game.capitalize())
+
 
 # --------------------------------------------------------------------------------------
 # Config
@@ -159,21 +174,25 @@ class CNNQNetwork(nn.Module):
 class MLPQNetwork(nn.Module):
     """Object-centric mode. Expects a flat feature vector (B, features).
 
-    Hidden sizes (512, 512) follow JAXAtari's own object-centric baseline
-    (ppo_jaxatari_scan.py uses Dense(461)->Dense(512)), NOT CleanRL's CartPole
-    c51_jax.py (120, 84): Atari OC feature vectors are far higher-dimensional than
-    CartPole's 4, so the CartPole-sized net severely underfits. Inputs are already
-    scaled to [0,1] by NormalizeObservationWrapper (see make_env), so no /255 here.
+    Hidden sizes: tapered (64, 32, 16), per tutor feedback (2026-07-07) that the
+    earlier (512, 512) net was too wide. Once inputs are normalized to [0,1] by
+    NormalizeObservationWrapper (see make_env), a small net suffices — the real fix
+    for the original OC collapse was normalization, not width. Width is exposed as
+    `hidden_sizes` so it can be re-tuned per game without editing the class.
+    (Earlier notes: JAXAtari's ppo_jaxatari_scan.py OC baseline uses Dense(461)->
+    Dense(512); CleanRL's CartPole c51_jax.py uses (120, 84).) No /255 here — inputs
+    are already scaled.
     """
     action_dim: int
     n_atoms: int
+    hidden_sizes: tuple = (64, 32, 16)
 
     @nn.compact
     def __call__(self, x):
         b = x.shape[0]
         x = x.astype(jnp.float32)
-        x = nn.relu(nn.Dense(512)(x))
-        x = nn.relu(nn.Dense(512)(x))
+        for h in self.hidden_sizes:
+            x = nn.relu(nn.Dense(h)(x))
         x = nn.Dense(self.action_dim * self.n_atoms)(x)
         x = x.reshape((b, self.action_dim, self.n_atoms))
         return nn.softmax(x, axis=-1)
@@ -516,7 +535,7 @@ def main(args: Args):
 
     # ---- save results -------------------------------------------------------------
     if args.save_results:
-        out_dir = os.path.join(args.results_dir, args.game)
+        out_dir = os.path.join(args.results_dir, ALGO_NAME, game_dir_name(args.game))
         os.makedirs(out_dir, exist_ok=True)
         tag = f"c51_{args.obs_mode}"
 

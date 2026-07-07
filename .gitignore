@@ -13,6 +13,19 @@ __pycache__/
 runs/
 wandb/
 *.cleanrl_model
+checkpoints/
+*.msgpack
+
+# LaTeX build artifacts (keep the .tex source and .pdf output, drop the rest)
+*.aux
+*.log
+*.out
+*.toc
+*.synctex.gz
+*.fls
+*.fdb_latexmk
+*.bbl
+*.blg
 
 # Atari sprites (downloaded via install-sprites)
 *.npy
