@@ -72,20 +72,28 @@ from jaxatari.wrappers import (
     LogWrapper,
 )
 
-# Results layout: results/<ALGO_NAME>/<Game>/<files>. The game arg is lowercase (the
-# JAXAtari key, e.g. "pong"); folders are TitleCase for readability. GAME_DISPLAY maps
-# the multi-word games that .capitalize() would mangle (e.g. "mspacman" -> "MsPacman").
+# Results layout: results/<ALGO_NAME>/<Game>/<ModeFolder>/<files>, e.g.
+# results/C51/Pong/Pixel/ and results/C51/Pong/ObjectCentric/. Sibling folders CleanRL/
+# (reference CSVs) and Report/ (.tex/.pdf + figures) are managed by the comparison tooling.
+# The game arg is lowercase (the JAXAtari key, e.g. "pong"); folders are TitleCase.
+# GAME_DISPLAY maps multi-word games that .capitalize() would mangle ("mspacman"->"MsPacman").
 ALGO_NAME = "C51"
 GAME_DISPLAY = {
     "mspacman": "MsPacman",
     "montezumarevenge": "MontezumaRevenge",
     "beamrider": "BeamRider",
 }
+MODE_DISPLAY = {"pixel": "Pixel", "object_centric": "ObjectCentric"}
 
 
 def game_dir_name(game: str) -> str:
     """TitleCase folder name for a JAXAtari game key (results/<algo>/<Game>/)."""
     return GAME_DISPLAY.get(game, game.capitalize())
+
+
+def mode_dir_name(obs_mode: str) -> str:
+    """Run-mode subfolder name (results/<algo>/<Game>/<Pixel|ObjectCentric>/)."""
+    return MODE_DISPLAY.get(obs_mode, obs_mode)
 
 
 # --------------------------------------------------------------------------------------
@@ -142,6 +150,9 @@ class Args:
     """how many times to break out of scan to log + checkpoint metrics"""
     save_results: bool = True
     results_dir: str = "results"
+    run_tag: str = ""
+    """optional suffix on output filenames (e.g. "512x512", "seed2") so variant runs of the
+    same (game, mode) don't overwrite each other. Empty = no suffix (default file names)."""
     rtpt_initials: str = "GZ"
     """name initials shown in the RTPT process title (lab rule). Set to '' to disable RTPT."""
 
@@ -535,9 +546,11 @@ def main(args: Args):
 
     # ---- save results -------------------------------------------------------------
     if args.save_results:
-        out_dir = os.path.join(args.results_dir, ALGO_NAME, game_dir_name(args.game))
+        out_dir = os.path.join(args.results_dir, ALGO_NAME, game_dir_name(args.game),
+                               mode_dir_name(args.obs_mode))
         os.makedirs(out_dir, exist_ok=True)
-        tag = f"c51_{args.obs_mode}"
+        suffix = f"_{args.run_tag}" if args.run_tag else ""
+        tag = f"c51_{args.obs_mode}{suffix}"
 
         # Wide metrics CSV (all tracked series). The legacy 2-column scores CSV is kept
         # for backward compatibility with existing plotting/report scripts.

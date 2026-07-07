@@ -66,23 +66,32 @@ jaxtari-baselines/
 │   ├── benchmark_throughput.py
 │   └── <ALGO>/                        # results/C51/, results/IQN/, ...
 │       └── <Game>/                    # results/C51/Pong/, results/C51/Frostbite/, ...
-│           ├── c51_<mode>_metrics.csv        # per (mode = pixel|object_centric)
-│           ├── c51_<mode>_scores.csv
-│           ├── c51_<mode>_learning_curve.png
-│           ├── c51_<mode>_metrics.png
-│           ├── <algo>_report_group_27.tex/.pdf   # the report + its figures
-│           └── ...
+│           ├── Pixel/                 # pixel-run outputs
+│           │   ├── c51_pixel_metrics.csv   (+ scores.csv, learning_curve.png, metrics.png)
+│           │   └── ...                # tagged variants: c51_pixel_<run-tag>_*.csv
+│           ├── ObjectCentric/         # OC-run outputs (all width/seed variants)
+│           │   └── c51_object_centric[_<run-tag>]_*.{csv,png}
+│           ├── CleanRL/               # reference CSV(s)
+│           │   └── cleanrl_<algo>_<game>_seed<seed>_metrics.csv
+│           └── Report/                # every .tex + .pdf, and the figures they embed
+│               ├── <algo>_report_group_27.tex/.pdf
+│               ├── <algo>_vs_cleanrl.png, <algo>_all_vs_cleanrl_metrics.png
+│               └── ...
 │
 ├── requirements.txt
 └── README.md
 ```
 
-**Results layout convention:** `results/<ALGO>/<Game>/<files>` — algorithm folder
-(TitleCase, e.g. `C51`, `IQN`), then game folder (TitleCase, e.g. `Pong`, `Frostbite`),
-which holds that run's metrics, charts, report and CleanRL reference CSV. The three
-comparison/benchmark scripts are shared tooling and stay at `results/` root. The agent
-builds this path from `ALGO_NAME` + `game_dir_name(args.game)` (game arg is the lowercase
-JAXAtari key; `GAME_DISPLAY` maps multi-word games like `mspacman` -> `MsPacman`).
+**Results layout convention:** `results/<ALGO>/<Game>/<Section>/<files>` — algorithm folder
+(TitleCase, e.g. `C51`, `IQN`), then game folder (TitleCase, e.g. `Pong`, `Frostbite`), then
+one of four **section subfolders**: `Pixel/` and `ObjectCentric/` (the two run modes),
+`CleanRL/` (reference CSVs), and `Report/` (every `.tex`+`.pdf` plus the comparison figures
+they embed — the report lives with its figures so `\includegraphics{bare_name}` resolves).
+The three comparison/benchmark scripts are shared tooling and stay at `results/` root. The
+agent builds `results/<ALGO_NAME>/<game_dir_name>/<mode_dir_name>/` (`GAME_DISPLAY` maps
+multi-word games like `mspacman`->`MsPacman`; `MODE_DISPLAY` maps `pixel`->`Pixel`,
+`object_centric`->`ObjectCentric`). Variant runs of the same (game, mode) are kept apart with
+`--run-tag` (suffix on the filenames, e.g. `c51_object_centric_64x32x16_scores.csv`).
 
 ## Key constraints
 
@@ -307,7 +316,8 @@ python agents/c51_jaxtari.py --game pong --obs-mode pixel         --total-timest
 python agents/c51_jaxtari.py --game pong --obs-mode object_centric --total-timesteps 200000
 ```
 
-Outputs per run in `results/<ALGO>/<Game>/` (e.g. `results/C51/Pong/`):
+Outputs per run in `results/<ALGO>/<Game>/<Pixel|ObjectCentric>/` (e.g.
+`results/C51/Pong/ObjectCentric/`):
 - `c51_<mode>_metrics.csv` — wide CSV: `global_step, episodic_return, episodic_length, loss,
   q_value, epsilon, sps` (mirrors CleanRL's TensorBoard `charts/` + `losses/` panels).
 - `c51_<mode>_metrics.png` — 6-panel dashboard of the above series.
@@ -356,15 +366,16 @@ on **every game we run**, produce the same deliverable:
 1. Run **both observation modes** (pixel/CNN and object-centric/MLP).
 2. Compare **three curves**: **our pixel vs our object-centric vs the CleanRL reference**
    (the "compare the 3" the tutor wants).
-3. Write a report from the LaTeX template at **`results/C51/Pong/c51_report_group_27.tex`**
-   (compiles to `..._group_27.pdf`), living in that run's `results/<ALGO>/<Game>/` folder.
+3. Write a report from the LaTeX template at **`results/C51/Pong/Report/c51_report_group_27.tex`**
+   (compiles to `..._group_27.pdf`), living in that run's `results/<ALGO>/<Game>/Report/` folder
+   alongside the figures it embeds.
    Reuse its layout: a short intro, a results table (final return per mode vs reference), the
    `compare_vs_cleanrl.png` learning-curve figure, the `compare_metrics_vs_cleanrl.png`
    6-panel metrics figure, a findings paragraph, and a "questions for feedback" block. Adapt
    the algorithm/game names and numbers per run.
 4. The two comparison figures come from the existing tooling: `results/compare_vs_cleanrl.py`
    (learning curve) and `results/compare_metrics_vs_cleanrl.py` (6-panel). Point them at the
-   `results/<ALGO>/<Game>/<algo>_<mode>_metrics.csv` files; the CleanRL reference CSV is
+   `results/<ALGO>/<Game>/<Pixel|ObjectCentric>/<algo>_<mode>_metrics.csv` files; the CleanRL reference CSV is
    per-(algo, game) and is extracted from the official tensorboard log the same way.
 
 **Multi-seed variance (tutor request, 2026-07-07):** for at least one *complicated* game

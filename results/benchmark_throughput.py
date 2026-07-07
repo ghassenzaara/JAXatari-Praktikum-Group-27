@@ -44,14 +44,20 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 AGENT = REPO_ROOT / "agents" / "c51_jaxtari.py"
 
-# Must mirror c51_jaxtari.py's output layout: <results-dir>/<ALGO>/<Game>/<files>.
+# Must mirror c51_jaxtari.py's output layout:
+# <results-dir>/<ALGO>/<Game>/<Pixel|ObjectCentric>/<files>.
 ALGO_NAME = "C51"
 _GAME_DISPLAY = {"mspacman": "MsPacman", "montezumarevenge": "MontezumaRevenge",
                  "beamrider": "BeamRider"}
+_MODE_DISPLAY = {"pixel": "Pixel", "object_centric": "ObjectCentric"}
 
 
 def game_dir_name(game):
     return _GAME_DISPLAY.get(game, game.capitalize())
+
+
+def mode_dir_name(obs_mode):
+    return _MODE_DISPLAY.get(obs_mode, obs_mode)
 
 
 def run_one(game, obs_mode, num_envs, total_timesteps, learning_starts, num_logs, seed):
@@ -78,7 +84,8 @@ def run_one(game, obs_mode, num_envs, total_timesteps, learning_starts, num_logs
         print(f"    FAILED (exit {proc.returncode}) - skipping this config")
         return None
 
-    metrics_csv = Path(tmp_dir) / ALGO_NAME / game_dir_name(game) / f"c51_{obs_mode}_metrics.csv"
+    metrics_csv = (Path(tmp_dir) / ALGO_NAME / game_dir_name(game)
+                   / mode_dir_name(obs_mode) / f"c51_{obs_mode}_metrics.csv")
     if not metrics_csv.exists():
         print(f"    no metrics csv at {metrics_csv} - skipping")
         return None

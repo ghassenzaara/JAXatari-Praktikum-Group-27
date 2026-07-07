@@ -1,24 +1,26 @@
 """
-6-panel metric comparison: our C51 (pixel + object-centric) vs CleanRL on Pong.
+6-panel metric comparison: our agent (pixel + object-centric) vs CleanRL.
 
 Group 27, Topic 27 (JAXAtari baselines).
 
+Generalized over algorithm and game via --algo/--game (default c51/pong). Paths are derived
+from results/<Algo>/<Game>/ using the lowercase algo key as the filename prefix (c51_, iqn_,
+...), matching what the agents write; pass explicit --*-csv/--out to override.
+
 One figure, 6 panels (episodic return, episodic length, loss, q-values, epsilon, SPS);
 each panel overlays up to THREE curves so all versions compare at a glance:
-  - CleanRL c51_atari_jax  (reference, ALE = Arcade Learning Environment / original Atari)
+  - CleanRL  (reference, ALE = Arcade Learning Environment / original Atari)
   - Ours: pixel   (JAXAtari, CNN)
   - Ours: object-centric   (JAXAtari, MLP)
 
 Inputs
 ------
-CleanRL: results/pong/cleanrl_c51_pong_seed1_metrics.csv  (long: tag,global_step,value),
-  extracted from the official tensorboard log
-  (huggingface.co/cleanrl/PongNoFrameskip-v4-c51_atari_jax-seed1).
-Ours: results/pong/c51_<mode>_metrics.csv  (wide: global_step,episodic_return,
-  episodic_length,loss,q_value,epsilon,sps), written by the current c51_jaxtari.py.
-  Any of our sources that is missing is simply skipped (with a warning). NOTE the original
-  pixel run predates metrics logging, so the pixel curve appears only after a rerun:
-      python agents/c51_jaxtari.py --game pong --obs-mode pixel --total-timesteps 10000000
+CleanRL: results/<Algo>/<Game>/cleanrl_<algo>_<game>_seed<seed>_metrics.csv  (long:
+  tag,global_step,value), extracted from the official tensorboard log (e.g. C51/Pong:
+  huggingface.co/cleanrl/PongNoFrameskip-v4-c51_atari_jax-seed1).
+Ours: results/<Algo>/<Game>/<algo>_<mode>_metrics.csv  (wide: global_step,episodic_return,
+  episodic_length,loss,q_value,epsilon,sps), written by the agent. Any missing source is
+  simply skipped (with a warning).
 
 Caveats to note in the report
 -----------------------------
@@ -27,8 +29,11 @@ Caveats to note in the report
 - episodic length is counted differently by JAXAtari vs ALE (note, not a bug).
 
 Usage:
-    python results/compare_metrics_vs_cleanrl.py         # CleanRL + pixel + OC (whatever exists)
-Output: results/pong/c51_all_vs_cleanrl_metrics.png
+    python results/compare_metrics_vs_cleanrl.py                       # c51 / pong (default)
+    python results/compare_metrics_vs_cleanrl.py --algo iqn --game frostbite
+Layout: reads results/<Algo>/<Game>/{Pixel,ObjectCentric,CleanRL}/, writes the figure into
+the sibling Report/ folder (next to the .tex that embeds it).
+Output: results/<Algo>/<Game>/Report/<algo>_all_vs_cleanrl_metrics.png
 """
 
 import argparse
@@ -39,9 +44,19 @@ from pathlib import Path
 import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-# Results layout: results/<ALGO>/<Game>/<files> (e.g. results/C51/Pong/...).
-RESULTS_DIR = REPO_ROOT / "results" / "C51" / "Pong"
-DEFAULT_CLEANRL = RESULTS_DIR / "cleanrl_c51_pong_seed1_metrics.csv"
+
+# Results layout: results/<Algo>/<Game>/<files> (e.g. results/C51/Pong/...). Folder names
+# are TitleCase; filenames use the lowercase algo key as prefix (c51_, iqn_, ...), matching
+# what the agents write. These maps mirror the agents' own display maps.
+ALGO_DISPLAY = {"c51": "C51", "iqn": "IQN", "rainbow": "Rainbow", "impala": "IMPALA"}
+GAME_DISPLAY = {"mspacman": "MsPacman", "montezumarevenge": "MontezumaRevenge",
+                "beamrider": "BeamRider"}
+
+
+def results_dir(algo, game):
+    """results/<Algo>/<Game>/ for a lowercase (algo, game) key pair."""
+    return (REPO_ROOT / "results" / ALGO_DISPLAY.get(algo, algo.upper())
+            / GAME_DISPLAY.get(game, game.capitalize()))
 
 # (panel title, CleanRL tag, our metrics.csv column)
 PANELS = [
@@ -109,27 +124,40 @@ def read_ours(path):
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--game", default="pong")
-    p.add_argument("--ours-pixel-csv",
-                   default=str(RESULTS_DIR / "c51_pixel_metrics.csv"))
-    p.add_argument("--ours-oc-csv",
-                   default=str(RESULTS_DIR / "c51_object_centric_metrics.csv"))
-    p.add_argument("--cleanrl-csv", default=str(DEFAULT_CLEANRL))
-    p.add_argument("--out",
-                   default=str(RESULTS_DIR / "c51_all_vs_cleanrl_metrics.png"))
+    p.add_argument("--algo", default="c51", help="algorithm key (c51, iqn, rainbow, impala)")
+    p.add_argument("--game", default="pong", help="game key (pong, frostbite, seaquest, ...)")
+    p.add_argument("--seed", type=int, default=1,
+                   help="seed used in the CleanRL reference filename")
+    # Paths below default to None and are derived from --algo/--game; pass to override.
+    p.add_argument("--ours-pixel-csv", default=None)
+    p.add_argument("--ours-oc-csv", default=None)
+    p.add_argument("--cleanrl-csv", default=None,
+                   help="CleanRL reference CSV; default cleanrl_<algo>_<game>_seed<seed>_metrics.csv")
+    p.add_argument("--out", default=None)
     args = p.parse_args()
 
-    cleanrl = read_cleanrl(args.cleanrl_csv)
+    algo, game = args.algo.lower(), args.game.lower()
+    rdir = results_dir(algo, game)
+    ours_pixel = args.ours_pixel_csv or str(rdir / "Pixel" / f"{algo}_pixel_metrics.csv")
+    ours_oc = args.ours_oc_csv or str(rdir / "ObjectCentric" / f"{algo}_object_centric_metrics.csv")
+    cleanrl_csv = args.cleanrl_csv or str(
+        rdir / "CleanRL" / f"cleanrl_{algo}_{game}_seed{args.seed}_metrics.csv")
+    out = args.out or str(rdir / "Report" / f"{algo}_all_vs_cleanrl_metrics.png")
+    algo_title = ALGO_DISPLAY.get(algo, algo.upper())
+
+    cleanrl = read_cleanrl(cleanrl_csv) if os.path.exists(cleanrl_csv) else {}
+    if not cleanrl:
+        print(f"WARNING: no CleanRL reference at {cleanrl_csv} - CleanRL curves skipped.")
 
     # Our sources: (label, color, {column: (steps, values)} or None)
     ours_sources = [
-        ("Ours: pixel", "C0", read_ours(args.ours_pixel_csv)),
-        ("Ours: object-centric", "C2", read_ours(args.ours_oc_csv)),
+        ("Ours: pixel", "C0", read_ours(ours_pixel)),
+        ("Ours: object-centric", "C2", read_ours(ours_oc)),
     ]
-    for (label, _, cols), path in zip(ours_sources, [args.ours_pixel_csv, args.ours_oc_csv]):
+    for (label, _, cols), path in zip(ours_sources, [ours_pixel, ours_oc]):
         if cols is None:
             print(f"WARNING: {label} metrics not found ({path}) - skipping that curve. "
-                  f"Re-run that mode with the current c51_jaxtari.py to include it.")
+                  f"Re-run that mode with the current agent to include it.")
 
     import matplotlib
     matplotlib.use("Agg")
@@ -149,12 +177,12 @@ def main():
         ax.set_xlabel("frames")
         ax.grid(True, alpha=0.3)
         ax.legend(fontsize=8, loc="best")
-    fig.suptitle(f"C51 on {args.game}: ours (pixel + object-centric) vs CleanRL c51_atari_jax",
+    fig.suptitle(f"{algo_title} on {game}: ours (pixel + object-centric) vs CleanRL",
                  y=1.00)
     fig.tight_layout()
-    os.makedirs(os.path.dirname(args.out), exist_ok=True)
-    fig.savefig(args.out, dpi=120)
-    print(f"3-way 6-panel comparison -> {args.out}")
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    fig.savefig(out, dpi=120)
+    print(f"3-way 6-panel comparison -> {out}")
 
 
 if __name__ == "__main__":
