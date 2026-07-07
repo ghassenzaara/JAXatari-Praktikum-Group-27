@@ -300,12 +300,14 @@ of the CleanRL sources lives in `C51 doccumentation.md` at the repo root.
   JAXAtari OC baseline uses `Dense(461)->Dense(512)`); Atari OC vectors are far higher-dim
   than CartPole's 4, so the small net underfit. **This applies to IQN/Rainbow/IMPALA too** —
   every OC agent needs `NormalizeObservationWrapper` + an appropriately sized MLP.
-  - **TUTOR FEEDBACK (2026-07-07): `512×512` is too wide.** He suggested trying something
-    narrower/tapered like **`64×32×16`**. The 512×512 net still solved Pong (+18), but the
-    real lesson was *normalization*, not width — once inputs are normalized a much smaller
-    net suffices and generalizes better. **TODO: re-run OC Pong with a `64→32→16` MLP** and
-    adopt the narrower default for OC across all algorithms (C51/IQN/Rainbow/IMPALA) if it
-    holds up. Keep the fix (Normalize) fixed; only the hidden sizes change.
+  - **OC MLP width — DECIDED: `512×512` (2026-07-07).** Three-way Pong comparison at 10M
+    frames: `512×512` → **+18.0** (fastest, only width that plateaus); `128×64×32` → **+12.4**
+    (solves late, still rising at 10M); `64×32×16` → **−2.4** (barely off the floor). Wider
+    buys convergence speed within the budget, so we standardize on `512×512`. Lesson was
+    *normalization*, not width — but width sets convergence speed. `hidden_sizes` default in
+    `MLPQNetwork` is now `(512, 512)`. Supplement report + 3-curve figure:
+    `results/C51/Pong/Report/c51_oc_width3_group_27.{tex,pdf}` (+ `c51_oc_width3_comparison.png`,
+    `plot_oc_width3.py`).
 - **`bash` cannot reach the WSL filesystem** (`\\wsl.localhost\...` is a UNC path the sandbox
   rejects), so training must be run in WSL directly; the Read/Write/Edit tools DO reach it.
 
