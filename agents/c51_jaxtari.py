@@ -185,18 +185,20 @@ class CNNQNetwork(nn.Module):
 class MLPQNetwork(nn.Module):
     """Object-centric mode. Expects a flat feature vector (B, features).
 
-    Hidden sizes: tapered (64, 32, 16), per tutor feedback (2026-07-07) that the
-    earlier (512, 512) net was too wide. Once inputs are normalized to [0,1] by
-    NormalizeObservationWrapper (see make_env), a small net suffices — the real fix
-    for the original OC collapse was normalization, not width. Width is exposed as
-    `hidden_sizes` so it can be re-tuned per game without editing the class.
-    (Earlier notes: JAXAtari's ppo_jaxatari_scan.py OC baseline uses Dense(461)->
-    Dense(512); CleanRL's CartPole c51_jax.py uses (120, 84).) No /255 here — inputs
-    are already scaled.
+    Hidden sizes: tapered (128, 64, 32). Tutor feedback (2026-07-07) was that the
+    earlier (512, 512) net was too wide; a first narrow try at (64, 32, 16) still solved
+    Pong but converged much later (flat until ~8.3M frames, only -2.4 at 10M — the 16-unit
+    layer before the 6*51=306-dim distributional head is a tight bottleneck). (128, 64, 32)
+    is the middle ground: much smaller than 512x512, no severe output bottleneck. Once inputs
+    are normalized to [0,1] by NormalizeObservationWrapper (see make_env) a small net
+    suffices — the real fix for the original OC collapse was normalization, not width. Width
+    is exposed as `hidden_sizes` so it can be re-tuned per game without editing the class.
+    (Refs: JAXAtari's ppo_jaxatari_scan.py OC baseline Dense(461)->Dense(512); CleanRL's
+    CartPole c51_jax.py (120, 84).) No /255 here — inputs are already scaled.
     """
     action_dim: int
     n_atoms: int
-    hidden_sizes: tuple = (64, 32, 16)
+    hidden_sizes: tuple = (128, 64, 32)
 
     @nn.compact
     def __call__(self, x):
