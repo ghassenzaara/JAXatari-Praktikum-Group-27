@@ -1,39 +1,13 @@
-"""
-Single-file C51 (Categorical DQN) for JAXAtari — pixel and object-centric modes.
+"""Single-file C51 (Categorical DQN) for JAXAtari, supporting pixel (CNN) and
+object-centric (MLP) observations via `--obs-mode`. Runs `--num-envs` vmapped
+parallel environments with the rollout + training loop in a single `jax.lax.scan`,
+and a jittable on-device replay buffer.
 
-Topic 26, TU Darmstadt JAXtari praktikum.
+Algorithm: Bellemare, Dabney & Munos (2017), https://arxiv.org/abs/1707.06887.
+Adapted from CleanRL's `c51_atari_jax.py` / `c51_jax.py` (Huang et al., MIT license,
+https://github.com/vwxyzjn/cleanrl); the C51 update is ported math-verbatim.
 
-Credits / sources
------------------
-- Algorithm: Bellemare, Dabney & Munos (2017), "A Distributional Perspective on
-  Reinforcement Learning", ICML. https://arxiv.org/abs/1707.06887
-- Reference implementations (CleanRL, Costa Huang et al., MIT-licensed):
-    * cleanrl/c51_atari_jax.py  -> CNN / pixel agent + full training scaffolding
-    * cleanrl/c51_jax.py        -> MLP head for low-level / object-centric features
-  https://github.com/vwxyzjn/cleanrl  (docs: https://docs.cleanrl.dev/rl-algorithms/c51/)
-- The distributional projection + cross-entropy loss are ported verbatim (math-wise)
-  from the CleanRL JAX C51 `update` function. See `C51 doccumentation.md` in the repo
-  root for the annotated reference this file was built from.
-
-What is different from CleanRL (and why)
-----------------------------------------
-1. Environment: JAXAtari (GPU, JAX-native) instead of gymnasium ALE. We use the
-   JAXAtari wrappers (AtariWrapper + Pixel/ObjectCentric + Log) directly.
-2. Replay buffer: CleanRL's ReplayBuffer needs gymnasium Spaces (which JAXAtari does
-   not expose). We use a small self-contained, jittable JAX replay buffer whose
-   storage is sized from the wrapper's JAXAtari `Box` observation space
-   (`env.observation_space().shape/.dtype`). No numpy ring buffer, no gymnasium Space.
-3. Both observation modes in one file (CNN for pixels, MLP for object-centric),
-   selected by `--obs-mode`. Architecture is the only structural difference
-   (cf. ppo_rgb vs ppo_oc) — hyperparameters are otherwise shared, since both modes
-   run the same games with the same clipped (+/-1) reward scale.
-4. Vectorized: `--num-envs` (default 8) parallel envs via `jax.vmap`.
-5. The whole rollout + training loop runs inside `jax.lax.scan` (project convention),
-   not a Python for-loop with a per-step jitted update.
-
-NOTE: This is a first full port. It is intended to be run/debugged on the GPU box in
-WSL (the dev sandbox has no GPU and cannot reach the WSL filesystem). Assumptions that
-should be verified on first run are flagged with `# VERIFY`.
+Topic 27, TU Darmstadt JAXtari praktikum.
 """
 
 import os
@@ -54,9 +28,8 @@ import tyro
 from flax import struct
 from flax.training.train_state import TrainState
 
-# RTPT (Remaining Time to Process Title): required by the TU ML student-pool rules so
-# lab admins can see who is running what and for how long. Optional import so the agent
-# still runs on machines without it (e.g. local dev). Enable/disable via --rtpt-initials.
+# RTPT: required by the TU ML student-pool rules (shows owner + remaining time in the
+# process title). Optional so the agent still runs on machines without it.
 try:
     from rtpt import RTPT
 except ImportError:
@@ -72,11 +45,9 @@ from jaxatari.wrappers import (
     LogWrapper,
 )
 
-# Results layout: results/<ALGO_NAME>/<Game>/<ModeFolder>/<files>, e.g.
-# results/C51/Pong/Pixel/ and results/C51/Pong/ObjectCentric/. Sibling folders CleanRL/
-# (reference CSVs) and Report/ (.tex/.pdf + figures) are managed by the comparison tooling.
-# The game arg is lowercase (the JAXAtari key, e.g. "pong"); folders are TitleCase.
-# GAME_DISPLAY maps multi-word games that .capitalize() would mangle ("mspacman"->"MsPacman").
+# Results layout: results/<ALGO_NAME>/<Game>/<Pixel|ObjectCentric>/<files>. Game args
+# are lowercase JAXAtari keys; folders are TitleCase (GAME_DISPLAY covers names that
+# .capitalize() would mangle).
 ALGO_NAME = "C51"
 GAME_DISPLAY = {
     "mspacman": "MsPacman",
@@ -128,11 +99,9 @@ class Args:
     v_min: float = -10.0
     v_max: float = 10.0
     buffer_size: int | None = None
-    """replay capacity. The buffer lives on-device (GPU) because it sits inside the
-    lax.scan carry. Pixel frames (4x84x84 uint8) are large (~55 KB/transition), so
-    capacity is VRAM-bound; OC vectors are tiny (~1 KB/transition) so the full CleanRL
-    buffer fits. If left unset, defaults per mode: 50_000 (pixel) / 1_000_000 (OC) —
-    sized for an 11 GB 2080 Ti. Lower the pixel value on <8GB GPUs (e.g. 10_000)."""
+    """replay capacity; unset = mode default (50_000 pixel / 1_000_000 OC). The buffer
+    lives on the GPU (inside the scan carry), so pixel capacity is VRAM-bound
+    (~55 KB/transition); lower it on <8 GB cards."""
     gamma: float = 0.99
     target_network_frequency: int = 10_000
     """frames between hard target-network syncs"""
@@ -183,14 +152,8 @@ class CNNQNetwork(nn.Module):
 
 
 class MLPQNetwork(nn.Module):
-    """Object-centric mode. Expects a flat feature vector (B, features).
-
-    Hidden sizes: (512, 512) — chosen final. History (Pong, 10M frames): 512x512 solved (+18,
-    fastest, only width that plateaus); (128, 64, 32) solved late (+12.4, still rising at 10M);
-    (64, 32, 16) barely off the floor (-2.4). Wider buys convergence speed within the budget, so
-    we standardize on 512x512. Inputs are already normalized to [0,1] by
-    NormalizeObservationWrapper, so no /255 here.
-    """
+    """Object-centric mode. Expects a flat feature vector (B, features) normalized
+    to [0,1] upstream by NormalizeObservationWrapper."""
     action_dim: int
     n_atoms: int
     hidden_sizes: tuple = (512, 512)
@@ -288,13 +251,9 @@ def make_env(args: Args):
             clip_reward=True,
         )
     elif args.obs_mode == "object_centric":
-        # NormalizeObservationWrapper is ESSENTIAL here: ObjectCentricWrapper emits raw
-        # pixel-space coordinates (x in [0,160], y in [0,210], widths, ...). The MLP has
-        # no input scaling of its own (unlike the CNN's /255), so without this the raw
-        # large-magnitude features saturate the tiny net, the per-atom softmax collapses
-        # to ~one-hot, and the greedy policy locks to a single bad action (Pong -> -21).
-        # NormalizeObservationWrapper scales each feature to [0,1] using the space bounds.
-        # Ordering matches JAXAtari's own ppo_oc baseline: Flatten(Normalize(OC(...))).
+        # ObjectCentricWrapper emits raw pixel-space coordinates; NormalizeObservationWrapper
+        # scales them to [0,1] for the MLP. Ordering matches JAXAtari's ppo_oc baseline:
+        # Flatten(Normalize(OC(...))).
         env = FlattenObservationWrapper(
             NormalizeObservationWrapper(
                 ObjectCentricWrapper(atari, frame_stack_size=4, frame_skip=4, clip_reward=True)
@@ -323,16 +282,13 @@ def main(args: Args):
 
     # ---- env + spaces -------------------------------------------------------------
     env = make_env(args)
-    n_actions = int(env.action_space().n)                       # VERIFY proxies to base env
+    n_actions = int(env.action_space().n)
     obs_space = env.observation_space()                         # JAXAtari Box (stacked)
     obs_shape = tuple(obs_space.shape)
     obs_dtype = obs_space.dtype
     print(f"obs_mode={args.obs_mode}  obs_shape={obs_shape}  dtype={obs_dtype}  n_actions={n_actions}")
 
-    # Mode-aware default replay capacity (on-device buffer is VRAM-bound for pixels).
-    # Pixel frames are ~55 KB/transition (obs+next_obs), so on an 11 GB 2080 Ti ~50k
-    # fits comfortably (~2.8 GB) while the CleanRL 1M (~56 GB) is impossible. OC vectors
-    # are ~1 KB/transition, so the full CleanRL 1M buffer costs only ~1 GB — no VRAM issue.
+    # Mode-aware default replay capacity (see Args.buffer_size).
     if args.buffer_size is None:
         args.buffer_size = 50_000 if args.obs_mode == "pixel" else 1_000_000
     print(f"buffer_size={args.buffer_size}")
@@ -415,6 +371,12 @@ def main(args: Args):
     # ---- one environment iteration (acts on all envs once) ------------------------
     exploration_frames = args.exploration_fraction * args.total_timesteps
 
+    # One iteration advances num_envs frames; matching CleanRL's cadence of one update
+    # per train_frequency frames therefore requires num_envs / train_frequency updates
+    # per iteration. When num_envs < train_frequency, a single update fires on
+    # train_frequency boundary crossings instead.
+    updates_per_iter = max(1, args.num_envs // args.train_frequency)
+
     def step(carry, _):
         q_state, buffer, obs, env_state, key, global_step = carry
         key, act_key, expl_key, sample_key = jax.random.split(key, 4)
@@ -430,10 +392,6 @@ def main(args: Args):
                             terminated.astype(jnp.float32), args.buffer_size)
         global_step = global_step + args.num_envs
 
-        # gradient step. train_frequency is in frames; we fire an update whenever the
-        # frame counter crosses a train_frequency boundary this iteration. When
-        # num_envs >= train_frequency that is every iteration; when smaller it spaces
-        # updates out to match the baseline cadence.
         crossed = (global_step // args.train_frequency) != ((global_step - args.num_envs) // args.train_frequency)
         do_train = jnp.logical_and(
             jnp.logical_and(global_step > args.learning_starts, buffer.size >= args.batch_size),
@@ -441,7 +399,13 @@ def main(args: Args):
         )
 
         def _train(qs):
-            return c51_update(qs, *buffer_sample(buffer, sample_key, args.batch_size))
+            def one_update(q, k):
+                q, loss, q_val = c51_update(q, *buffer_sample(buffer, k, args.batch_size))
+                return q, (loss, q_val)
+
+            keys = jax.random.split(sample_key, updates_per_iter)
+            qs, (losses, q_vals) = jax.lax.scan(one_update, qs, keys)
+            return qs, losses.mean(), q_vals.mean()
 
         def _skip(qs):
             return qs, jnp.float32(0.0), jnp.float32(0.0)
@@ -490,10 +454,9 @@ def main(args: Args):
         print("(RTPT not installed — process title won't show remaining time. "
               "`pip install rtpt` on the lab machine.)")
 
-    # Per-chunk records, one row per log point. Columns mirror CleanRL's TensorBoard panels
-    # (charts/episodic_return, charts/episodic_length, losses/loss, losses/q_values,
-    # charts/epsilon, charts/SPS) so the report can show the same dashboard offline.
-    history = []  # list of dicts (see COLUMNS below)
+    # One row per log point; columns mirror CleanRL's TensorBoard panels
+    # (charts/* and losses/*) for direct comparison.
+    history = []
     COLUMNS = ["global_step", "episodic_return", "episodic_length",
                "loss", "q_value", "epsilon", "sps"]
     start_time = time.time()
@@ -601,7 +564,7 @@ def main(args: Args):
             plt.close(fig)
             print(f"panels  -> {dash_path}")
 
-            # Standalone learning curve (kept for the report / backward compatibility).
+            # Standalone learning curve.
             ret = _series("episodic_return")
             m = ~np.isnan(ret)
             if m.any():

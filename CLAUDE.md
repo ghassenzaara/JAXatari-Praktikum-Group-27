@@ -223,9 +223,14 @@ These sometimes have JAX implementations worth studying, but they do **not** fol
 
 ## C51 implementation (agents/c51_jaxtari.py)
 
-Status: first full port written (`agents/c51_jaxtari.py`). The old verbatim CleanRL copy
-`agents/c51_atari_jax.py` is superseded and should be deleted. A consolidated reference
-of the CleanRL sources lives in `C51 doccumentation.md` at the repo root.
+Status: validated by full 10M runs (Pong pixel +20.8, Pong OC +18.0, Frostbite pixel).
+The old verbatim CleanRL copy `agents/c51_atari_jax.py` has been deleted. A consolidated
+reference of the CleanRL sources lives in `C51 doccumentation.md` at the repo root.
+Config audit vs CleanRL (2026-07-12): all shared HPs match the `c51_atari_jax.py` table
+exactly (lr, atoms, v-range, gamma, target freq, batch, epsilon schedule, learning_starts,
+train_frequency, adam eps, preprocessing). Known deviations: num_envs 8 (project),
+pixel buffer 50k (VRAM), OC net/width (no CleanRL Atari-OC baseline). The update-ratio
+deviation found in the audit was **fixed the same day** — see below.
 
 ### JAXAtari API facts (verified by reading the installed package)
 
@@ -286,6 +291,15 @@ of the CleanRL sources lives in `C51 doccumentation.md` at the repo root.
   cross-entropy loss) ported verbatim from CleanRL; rewards/dones reshaped to (B,1) for the
   support shift.
 - **Optimizer** switch `--optimizer {adam,rmsprop}` (adam default, `eps=0.01/batch_size`).
+- **Update-to-data ratio: FIXED 2026-07-12 to match CleanRL exactly.** The scan `step()`
+  now fires `updates_per_iter = max(1, num_envs // train_frequency)` gradient updates per
+  iteration via an inner `lax.scan` (2 at the 8-env default → 1 update / 4 frames, same
+  as CleanRL; the other C51 group does the same at 32 envs). Before this fix it fired at
+  most ONE update per iteration → 1 update / 8 frames, HALF of CleanRL's replay ratio.
+  **All runs from before 2026-07-12 (Pong pixel +20.8, Pong OC width study, Frostbite
+  pixel) used the old halved cadence** — they still stand (Pong solved anyway) but are
+  not update-ratio-comparable to new runs; rerun before mixing curves in one figure.
+  Expect new runs to have ~2x the gradient steps and somewhat lower SPS.
 - **Object-centric MUST be normalized (bug fixed 2026-07-04).** First OC Pong run collapsed:
   return went −19.6 → **−21.0** and froze for ~9M steps while pixel solved the game (→ +20.8).
   Root cause: `ObjectCentricWrapper` emits **raw pixel-space coordinates** (x∈[0,160],
@@ -329,8 +343,8 @@ Outputs per run in `results/<ALGO>/<Game>/<Pixel|ObjectCentric>/` (e.g.
 
 `loss`/`q_value` are averaged only over iterations where a gradient step actually fired
 (pre-`learning_starts` iters report 0 and are masked out), so early rows show `nan` there.
-CLI flags marked `# VERIFY` in the file (e.g. `action_space().n`, obs shapes) should be
-sanity-checked on the first run.
+(The old `# VERIFY` markers were removed 2026-07-12 — API assumptions were confirmed by
+the full 10M runs.)
 
 ### CleanRL comparison tooling (results/)
 
@@ -338,7 +352,8 @@ The supervisor wants learning curves compared against the original (CleanRL) sid
 - **CleanRL reference data:** pulled from the official run's tensorboard log at
   `huggingface.co/cleanrl/PongNoFrameskip-v4-c51_atari_jax-seed1` (file
   `events.out.tfevents.*`), parsed with a dependency-free TFRecord/protobuf reader into
-  `results/C51/Pong/cleanrl_c51_pong_seed1_metrics.csv` (long format: `tag,global_step,value`).
+  `results/C51/Pong/CleanRL/cleanrl_c51_pong_seed1_metrics.csv` (long format:
+  `tag,global_step,value`).
   Tags available: `charts/episodic_return`, `charts/episodic_length`, `charts/epsilon`,
   `losses/loss`, `losses/q_values`, `charts/SPS`, `eval/episodic_return`.
 - **`results/compare_vs_cleanrl.py`** — single episodic-return overlay (ours pixel + OC vs the
@@ -351,11 +366,8 @@ The supervisor wants learning curves compared against the original (CleanRL) sid
   it to our own pixel / JAXAtari `ppo_oc`. Early findings on Pong: our OC SPS ~1300 vs CleanRL
   ~500 (>2x faster at only 8 envs); loss/epsilon/q_values overlap CleanRL closely; episodic
   length differs (JAXAtari counts episode steps differently than ALE — note, not a bug).
-- **GOTCHA — old pixel run has no metrics:** the original `c51_pixel_scores.csv` predates the
-  6-metric logging, so it only holds `episodic_return`. To get the full pixel `metrics.csv`
-  (loss/q/length/epsilon/sps) for the 6-panel comparison, the pixel run must be **redone with
-  the current `c51_jaxtari.py`** (full 10M so the x-axis matches CleanRL). The OC run already
-  has its `metrics.csv`.
+- ~~GOTCHA — old pixel run has no metrics~~ **resolved:** the Pong pixel run was redone with
+  full 6-metric logging; `results/C51/Pong/Pixel/c51_pixel_metrics.csv` exists.
 
 ---
 
