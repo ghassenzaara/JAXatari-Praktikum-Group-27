@@ -205,8 +205,8 @@ def buffer_add(buf: ReplayBuffer, obs, actions, rewards, next_obs, dones, capaci
     n = obs.shape[0]
     idx = (buf.pos + jnp.arange(n)) % capacity
     return buf.replace(
-        obs=buf.obs.at[idx].set(obs),
-        next_obs=buf.next_obs.at[idx].set(next_obs),
+        obs=buf.obs.at[idx].set(obs.astype(buf.obs.dtype)),
+        next_obs=buf.next_obs.at[idx].set(next_obs.astype(buf.next_obs.dtype)),
         actions=buf.actions.at[idx].set(actions.astype(jnp.int32)),
         rewards=buf.rewards.at[idx].set(rewards.astype(jnp.float32)),
         dones=buf.dones.at[idx].set(dones.astype(jnp.float32)),
@@ -316,7 +316,9 @@ def main(args: Args):
     q_state = C51TrainState.create(
         apply_fn=q_network.apply,
         params=params,
-        target_params=params,
+        # A distinct copy: params and target_params sharing one buffer would break the
+        # donated scan carry (the same buffer cannot be donated twice).
+        target_params=jax.tree_util.tree_map(jnp.copy, params),
         atoms=jnp.asarray(np.linspace(args.v_min, args.v_max, num=args.n_atoms), dtype=jnp.float32),
         tx=tx,
     )
