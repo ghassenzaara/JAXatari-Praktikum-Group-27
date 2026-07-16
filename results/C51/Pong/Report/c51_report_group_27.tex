@@ -25,8 +25,8 @@ observation modes (pixel with a CNN, object-centric with an MLP).
 \toprule
 Mode & Network & Final return (10M) & Reference \\
 \midrule
-Pixel           & CNN & $\mathbf{+20.8}$ & CleanRL C51 $\approx +20$ \\
-Object-centric  & MLP & $\mathbf{+18.0}$ & no OC reference \\
+Pixel           & CNN & $\mathbf{+20.6}$ & CleanRL C51 $\approx +20$ \\
+Object-centric  & MLP & $\mathbf{+19.0}$ & no OC reference \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -36,7 +36,8 @@ Object-centric  & MLP & $\mathbf{+18.0}$ & no OC reference \\
 \includegraphics[width=0.72\linewidth]{c51_vs_cleanrl.png}
 \caption*{\small Episodic return on Pong (10M frames): our pixel and object-centric runs
 vs the CleanRL \texttt{c51\_atari\_jax} reference curve (ALE). Our pixel matches CleanRL;
-object-centric learns slower but reaches $+18$.}
+object-centric learns slower but reaches $+19$. Both runs use CleanRL's exact
+update-to-data ratio (one gradient update per 4 frames).}
 \end{figure}
 
 \textbf{Object-centric finding.}

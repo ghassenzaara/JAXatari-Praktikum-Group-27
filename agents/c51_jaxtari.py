@@ -433,7 +433,9 @@ def main(args: Args):
         }
         return (q_state, buffer, next_obs, env_state, key, global_step), metrics
 
-    @partial(jax.jit, static_argnames=("n_iters",))
+    # donate_argnums lets XLA reuse the input carry's memory for the output; without it
+    # the multi-GB replay buffer is double-buffered across chunk calls and can OOM.
+    @partial(jax.jit, static_argnames=("n_iters",), donate_argnums=(0,))
     def run_chunk(carry, n_iters):
         return jax.lax.scan(step, carry, None, length=n_iters)
 

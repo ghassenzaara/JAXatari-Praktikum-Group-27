@@ -223,7 +223,8 @@ These sometimes have JAX implementations worth studying, but they do **not** fol
 
 ## C51 implementation (agents/c51_jaxtari.py)
 
-Status: validated by full 10M runs (Pong pixel +20.8, Pong OC +18.0, Frostbite pixel).
+Status: validated by full 10M runs. Current Pong numbers (2026-07-15 reruns at the fixed
+CleanRL update ratio): pixel **+20.6**, OC 512×512 **+19.0**; Frostbite pixel still pre-fix.
 The old verbatim CleanRL copy `agents/c51_atari_jax.py` has been deleted. A consolidated
 reference of the CleanRL sources lives in `C51 doccumentation.md` at the repo root.
 Config audit vs CleanRL (2026-07-12): all shared HPs match the `c51_atari_jax.py` table
@@ -285,6 +286,9 @@ deviation found in the audit was **fixed the same day** — see below.
   diversity vs. the paper's 1M) remains and is noted for the report. The considered alternative — a NumPy/CPU buffer with only sampled
   batches moved to GPU — was rejected because it requires breaking out of `lax.scan` for the
   (non-traceable) numpy sampling step. Set `XLA_PYTHON_CLIENT_MEM_FRACTION=0.9` for headroom.
+  `run_chunk` is jitted with `donate_argnums=(0,)` (added 2026-07-16 after Frostbite OC
+  OOMed): without donation XLA double-buffers the carry across chunk calls, so a large
+  buffer (Frostbite OC = 724 float16 features → ~2.9 GB obs+next_obs) allocates twice.
 - **Vectorized** with `jax.vmap` over `num_envs` (default 8); the whole rollout+train loop is a
   single `jax.lax.scan`, chunked in Python only to log periodically.
 - **C51 core** (greedy-by-expected-value action, distributional projection via `fori_loop`,
@@ -296,10 +300,15 @@ deviation found in the audit was **fixed the same day** — see below.
   iteration via an inner `lax.scan` (2 at the 8-env default → 1 update / 4 frames, same
   as CleanRL; the other C51 group does the same at 32 envs). Before this fix it fired at
   most ONE update per iteration → 1 update / 8 frames, HALF of CleanRL's replay ratio.
-  **All runs from before 2026-07-12 (Pong pixel +20.8, Pong OC width study, Frostbite
-  pixel) used the old halved cadence** — they still stand (Pong solved anyway) but are
-  not update-ratio-comparable to new runs; rerun before mixing curves in one figure.
-  Expect new runs to have ~2x the gradient steps and somewhat lower SPS.
+  **All runs from before 2026-07-12 used the old halved cadence** and are not
+  update-ratio-comparable to new runs. **Pong was rerun 2026-07-15 at the fixed ratio**
+  (both modes): pixel +20.6 final / solves ~30% earlier (crosses 0 at 2.0M vs 2.9M, +20 at
+  3.4M vs 3.8M) at ~33% lower SPS (~2214 vs ~3291); OC 512×512 improved +16.9→+19.0
+  final and also learns ~1M+ frames earlier. Still pre-fix: Frostbite pixel and the OC
+  width-study runs (64×32×16, 128×64×32) — rerun before mixing their curves with new ones.
+  The main Pong report + both comparison figures were regenerated from the new-ratio CSVs
+  (OC curve = the `_512x512`-tagged files; the untagged OC filenames no longer exist, so
+  the compare scripts need `--ours-oc-csv .../c51_object_centric_512x512_{scores,metrics}.csv`).
 - **Object-centric MUST be normalized (bug fixed 2026-07-04).** First OC Pong run collapsed:
   return went −19.6 → **−21.0** and froze for ~9M steps while pixel solved the game (→ +20.8).
   Root cause: `ObjectCentricWrapper` emits **raw pixel-space coordinates** (x∈[0,160],
